@@ -557,60 +557,15 @@ def main():
     groupP = parser.add_argument_group('Processing')
     groupP.add_argument("--html", action="store_true",
                         help="produce HTML output, subsumes --links")
-    groupP.add_argument("-l", "--links", action="store_true",
-                        help="preserve links")
-    groupP.add_argument("-s", "--sections", action="store_true",
-                        help="preserve sections")
-    groupP.add_argument("--lists", action="store_true",
-                        help="preserve lists")
-    groupP.add_argument("-ns", "--namespaces", default="", metavar="ns1,ns2",
-                        help="accepted namespaces in links")
-    groupP.add_argument("--templates",
-                        help="use or create file containing templates")
-    groupP.add_argument("--no-templates", action="store_false",
-                        help="Do not expand templates")
-    groupP.add_argument("-r", "--revision", action="store_true", default=options.print_revision,
-                        help="Include the document revision id (default=%(default)s)")
-    groupP.add_argument("--min_text_length", type=int, default=options.min_text_length,
-                        help="Minimum expanded text length required to write document (default=%(default)s)")
-    groupP.add_argument("--filter_disambig_pages", action="store_true", default=options.filter_disambig_pages,
-                        help="Remove pages from output that contain disabmiguation markup (default=%(default)s)")
-    groupP.add_argument("-it", "--ignored_tags", default="", metavar="abbr,b,big",
-                        help="comma separated list of tags that will be dropped, keeping their content")
-    groupP.add_argument("-de", "--discard_elements", default="", metavar="gallery,timeline,noinclude",
-                        help="comma separated list of elements that will be removed from the article text")
-    groupP.add_argument("--keep_tables", action="store_true", default=options.keep_tables,
-                        help="Preserve tables in the output article text (default=%(default)s)")
+
     default_process_count = max(1, cpu_count() - 1)
     parser.add_argument("--processes", type=int, default=default_process_count,
                         help="Number of processes to use (default %(default)s)")
 
-    groupS = parser.add_argument_group('Special')
-    groupS.add_argument("-q", "--quiet", action="store_true",
-                        help="suppress reporting progress info")
-    groupS.add_argument("--debug", action="store_true",
-                        help="print debug info")
-    groupS.add_argument("-a", "--article", action="store_true",
-                        help="analyze a file containing a single article (debug option)")
-    groupS.add_argument("-v", "--version", action="version",
-                        version='%(prog)s ' + version,
-                        help="print program version")
+
 
     args = parser.parse_args()
-
-    options.keepLinks = args.links
-    options.keepSections = args.sections
-    options.keepLists = args.lists
-    options.toHTML = args.html
     options.write_json = args.json
-    options.print_revision = args.revision
-    options.min_text_length = args.min_text_length
-    if args.html:
-        options.keepLinks = True
-
-    options.expand_templates = args.no_templates
-    options.filter_disambig_pages = args.filter_disambig_pages
-    options.keep_tables = args.keep_tables
 
     try:
         power = 'kmg'.find(args.bytes[-1].lower()) + 1
@@ -620,27 +575,6 @@ def main():
     except ValueError:
         logging.error('Insufficient or invalid size: %s', args.bytes)
         return
-
-    if args.namespaces:
-        options.acceptedNamespaces = set(args.namespaces.split(','))
-
-    # ignoredTags and discardElemets have default values already supplied, if passed in the defaults are overwritten
-    if args.ignored_tags:
-        ignoredTags = set(args.ignored_tags.split(','))
-    else:
-        ignoredTags = [
-            'abbr', 'b', 'big', 'blockquote', 'center', 'cite', 'em',
-            'font', 'h1', 'h2', 'h3', 'h4', 'hiero', 'i', 'kbd',
-            'p', 'plaintext', 's', 'span', 'strike', 'strong',
-            'tt', 'u', 'var'
-        ]
-
-    # 'a' tag is handled separately
-    for tag in ignoredTags:
-        ignoreTag(tag)
-
-    if args.discard_elements:
-        options.discardElements = set(args.discard_elements.split(','))
 
     FORMAT = '%(levelname)s: %(message)s'
     logging.basicConfig(format=FORMAT)
