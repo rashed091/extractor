@@ -1,5 +1,6 @@
 from __future__ import unicode_literals, division
 
+import spacy
 import sys
 import argparse
 import bz2
@@ -8,11 +9,41 @@ import logging
 import os.path
 import re
 import time
-import json
+import ujson
 from io import StringIO
 from multiprocessing import Queue, Process, Value, cpu_count
 from timeit import default_timer
-from itertools import zip_longest
+
+
+# ===========================================================================
+pre_format_re = re.compile(r'^[\`\*\~]')
+post_format_re = re.compile(r'[\`\*\~]$')
+url_re = re.compile(r'\[([^]]+)\]\(%%URL\)')
+link_re = re.compile(r'\[([^]]+)\]\(https?://[^\)]+\)')
+
+# ===========================================================================
+LABELS = {
+    'ENT': 'ENT',
+    'PERSON': 'ENT',
+    'NORP': 'ENT',
+    'FAC': 'ENT',
+    'ORG': 'ENT',
+    'GPE': 'ENT',
+    'LOC': 'ENT',
+    'LAW': 'ENT',
+    'PRODUCT': 'ENT',
+    'EVENT': 'ENT',
+    'WORK_OF_ART': 'ENT',
+    'LANGUAGE': 'ENT',
+    'DATE': 'DATE',
+    'TIME': 'TIME',
+    'PERCENT': 'PERCENT',
+    'MONEY': 'MONEY',
+    'QUANTITY': 'QUANTITY',
+    'ORDINAL': 'ORDINAL',
+    'CARDINAL': 'CARDINAL'
+}
+
 
 # ===========================================================================
 def createLogger(quiet, debug):
@@ -22,192 +53,75 @@ def createLogger(quiet, debug):
     if debug:
         logger.setLevel(logging.DEBUG)
 
-
-# ===========================================================================
-# Match preformatted lines
-preformatted = re.compile(r'^ .*?$')
-
-# Matches bold/italic
-bold_italic = re.compile(r"'''''(.*?)'''''")
-bold = re.compile(r"'''(.*?)'''")
-italic_quote = re.compile(r"''\"([^\"]*?)\"''")
-italic = re.compile(r"''(.*?)''")
-quote_quote = re.compile(r'""([^"]*?)""')
-
-# Matches space
-spaces = re.compile(r' {2,}')
-
-# Matches dots
-dots = re.compile(r'\.{4,}')
-
-
 # ======================================================================
 
 class Extractor(object):
     """
     An extraction task on a article.
     """
-
-    def __init__(self, id, revid, title, lines):
-        """
-        :param id: id of page.
-        :param title: tutle of page.
-        :param lines: a list of lines.
-        """
-        self.title = title
-        self.text = ''.join(lines)
-
+    def __init__(self, id, text):
+        self.id = id
+        self.text = text
+        self.nlp = spacy.load('en')
 
     def write_output(self, out, text):
         """
         :param out: a memory file
         :param text: the text of the page
         """
-        url = get_url(self.id)
-        if options.write_json:
-            json_data = {
-                'id': self.id,
-                'url': url,
-                'title': self.title,
-                'text': "\n".join(text)
-            }
-            if options.print_revision:
-                json_data['revid'] = self.revid
-            # We don't use json.dump(data, out) because we want to be
-            # able to encode the string if the output is sys.stdout
-            out_str = json.dumps(json_data, ensure_ascii=False)
-            if out == sys.stdout:  # option -a or -o -
-                out_str = out_str.encode('utf-8')
-            out.write(out_str)
-            out.write('\n')
-        else:
-            if options.print_revision:
-                header = '<doc id="%s" revid="%s" url="%s" title="%s">\n' % (self.id, self.revid, url, self.title)
-            else:
-                header = '<doc id="%s" url="%s" title="%s">\n' % (self.id, url, self.title)
-            footer = "\n</doc>\n"
-            if out == sys.stdout:  # option -a or -o -
-                header = header.encode('utf-8')
-            out.write(header)
-            for line in text:
-                if out == sys.stdout:  # option -a or -o -
-                    line = line.encode('utf-8')
-                out.write(line)
-                out.write('\n')
-            out.write(footer)
+        if out == sys.stdout:  # option -a or -o -
+            text = text.encode('utf-8')
+        out.write(str(text))
+        out.write('\n')
 
     def extract(self, out):
         """
         :param out: a memory file.
         """
-        logging.info('%s\t%s', self.id, self.title)
-
-        # Separate header from text with a newline.
-        if options.toHTML:
-            title_str = '<h1>' + self.title + '</h1>'
-        else:
-            title_str = self.title + '\n'
-        # https://www.mediawiki.org/wiki/Help:Magic_words
-        colon = self.title.find(':')
-        if colon != -1:
-            ns = self.title[:colon]
-            pagename = self.title[colon + 1:]
-        else:
-            ns = ''  # Main
-            pagename = self.title
         text = self.text
         self.text = ''  # save memory
 
-        text = self.transform(text)
-        text = self.wiki2text(text)
-        # text = compact(self.clean(text))
-        text = [title_str] + text
+        text = self.strip_meta(text)
+        # text = self.clean(text)
 
-        if sum(len(line) for line in text) < options.min_text_length:
-            return
-
+        doc = self.nlp(text)
+        text = self.transform_doc(doc)
         self.write_output(out, text)
 
-        errs = (self.template_title_errs,
-                self.recursion_exceeded_1_errs,
-                self.recursion_exceeded_2_errs,
-                self.recursion_exceeded_3_errs)
-        if any(errs):
-            logging.warn("Template errors in article '%s' (%s): title(%d) recursion(%d, %d, %d)",
-                         self.title, self.id, *errs)
-
-
-    def wiki2text(self, text):
+    def strip_meta(self, text):
         # residuals of unbalanced quotes
-        text = text.replace("'''", '').replace("''", '"')
-
+        text = link_re.sub(r'\1', text)
+        text = text.replace('&gt;', '>').replace('&lt;', '<')
+        text = pre_format_re.sub('', text)
+        text = post_format_re.sub('', text)
+        text = text.replace('\\', '')
         return text
 
-    def clean(self, text):
-        """
-        Removes irrelevant parts from :param: text.
-        """
 
-        # Collect spans
-        spans = []
-        # Drop HTML comments
-        for m in comment.finditer(text):
-            spans.append((m.start(), m.end()))
+    def transform_doc(self, doc):
+        for ent in doc.ents:
+            ent.merge(tag=ent.root.tag_, lemma=ent.text, ent_type=LABELS[ent.label_])
+        for np in doc.noun_chunks:
+            while len(np) > 1 and np[0].dep_ not in ('advmod', 'amod', 'compound'):
+                np = np[1:]
+            np.merge(tag=np.root.tag_, lemma=np.text, ent_type=np.root.ent_type_)
+        strings = []
+        for sent in doc.sents:
+            if sent.text.strip():
+                strings.append(' '.join(self.represent_word(w) for w in sent if not w.is_space))
+        if strings:
+            return '\n'.join(strings) + '\n'
+        else:
+            return ''
 
-        # Drop self-closing tags
-        for pattern in selfClosing_tag_patterns:
-            for m in pattern.finditer(text):
-                spans.append((m.start(), m.end()))
-
-        # Drop ignored tags
-        for left, right in options.ignored_tag_patterns:
-            for m in left.finditer(text):
-                spans.append((m.start(), m.end()))
-            for m in right.finditer(text):
-                spans.append((m.start(), m.end()))
-
-        # Bulk remove all spans
-        text = dropSpans(spans, text)
-
-        # Drop discarded elements
-        for tag in options.discardElements:
-            text = dropNested(text, r'<\s*%s\b[^>/]*>' % tag, r'<\s*/\s*%s>' % tag)
-
-        if not options.toHTML:
-            # Turn into text what is left (&amp;nbsp;) and <syntaxhighlight>
-            text = unescape(text)
-
-        # Expand placeholders
-        for pattern, placeholder in placeholder_tag_patterns:
-            index = 1
-            for match in pattern.finditer(text):
-                text = text.replace(match.group(), '%s_%d' % (placeholder, index))
-                index += 1
-
-        text = text.replace('<<', '«').replace('>>', '»')
-
-        #############################################
-
-        # Cleanup text
-        text = text.replace('\t', ' ')
-        text = spaces.sub(' ', text)
-        text = dots.sub('...', text)
-        text = re.sub(' (,:\.\)\]»)', r'\1', text)
-        text = re.sub('(\[\(«) ', r'\1', text)
-        text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)  # lines with only punctuations
-        text = text.replace(',,', ',').replace(',.', '.')
-        if options.keep_tables:
-            # the following regular expressions are used to remove the wikiml chartacters around table strucutures
-            # yet keep the content. The order here is imporant so we remove certain markup like {| and then
-            # then the future html attributes such as 'style'. Finally we drop the remaining '|-' that delimits cells.
-            text = re.sub(r'!(?:\s)?style=\"[a-z]+:(?:\d+)%;\"', r'', text)
-            text = re.sub(r'!(?:\s)?style="[a-z]+:(?:\d+)%;[a-z]+:(?:#)?(?:[0-9a-z]+)?"', r'', text)
-            text = text.replace('|-', '')
-            text = text.replace('|', '')
-        if options.toHTML:
-            text = cgi.escape(text)
-        return text
-
+    def represent_word(self, word):
+        if word.like_url:
+            return '%%URL|X'
+        text = re.sub(r'\s', '_', word.text)
+        tag = LABELS.get(word.ent_type_, word.pos_)
+        if not tag:
+            tag = '?'
+        return text + '|' + tag
 
 # ----------------------------------------------------------------------
 # Output
@@ -242,7 +156,7 @@ class NextFile(object):
         return os.path.join(self.path_name, '%c%c' % (ord('A') + char2, ord('A') + char1))
 
     def _filepath(self):
-        return '%s/wiki_%02d' % (self._dirname(), self.file_index)
+        return '%s/reddit_%02d' % (self._dirname(), self.file_index)
 
 
 class OutputSplitter(object):
@@ -283,8 +197,7 @@ class OutputSplitter(object):
 
 # ----------------------------------------------------------------------
 
-def process_dump(input_file, template_file, out_file, file_size, file_compress,
-                 process_count):
+def process_dump(input_file, out_file, file_size, file_compress, process_count):
     """
     :param input_file: name of the wikipedia dump file; '-' to read from stdin
     :param template_file: optional file with template definitions.
@@ -293,71 +206,18 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     :param file_compress: whether to compress files with bzip.
     :param process_count: number of extraction processes to spawn.
     """
-
     if input_file == '-':
         input = sys.stdin
     else:
         input = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
 
-    # collect siteinfo
-    for line in input:
-        # When an input file is .bz2 or .gz, line can be a bytes even in Python 3.
-        if not isinstance(line, text_type): line = line.decode('utf-8')
-        m = tagRE.search(line)
-        if not m:
-            continue
-        tag = m.group(2)
-        if tag == 'base':
-            # discover urlbase from the xml dump file
-            # /mediawiki/siteinfo/base
-            base = m.group(3)
-            options.urlbase = base[:base.rfind("/")]
-        elif tag == 'namespace':
-            mk = keyRE.search(line)
-            if mk:
-                nsid = mk.group(1)
-            else:
-                nsid = ''
-            options.knownNamespaces[m.group(3)] = nsid
-            if re.search('key="10"', line):
-                options.templateNamespace = m.group(3)
-                options.templatePrefix = options.templateNamespace + ':'
-            elif re.search('key="828"', line):
-                options.moduleNamespace = m.group(3)
-                options.modulePrefix = options.moduleNamespace + ':'
-        elif tag == '/siteinfo':
-            break
-
-    if options.expand_templates:
-        # preprocess
-        template_load_start = default_timer()
-        if template_file:
-            if os.path.exists(template_file):
-                logging.info("Loading template definitions from: %s", template_file)
-                # can't use with here:
-                file = fileinput.FileInput(template_file,
-                                           openhook=fileinput.hook_compressed)
-                load_templates(file)
-                file.close()
-            else:
-                if input_file == '-':
-                    # can't scan then reset stdin; must error w/ suggestion to specify template_file
-                    raise ValueError("to use templates with stdin dump, must supply explicit template-file")
-                logging.info("Preprocessing '%s' to collect template definitions: this may take some time.", input_file)
-                load_templates(input, template_file)
-                input.close()
-                input = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
-        template_load_elapsed = default_timer() - template_load_start
-        logging.info("Loaded %d templates in %.1fs", len(options.templates), template_load_elapsed)
-
-    # process pages
     logging.info("Starting page extraction from %s.", input_file)
     extract_start = default_timer()
 
     # Parallel Map/Reduce:
     # - pages to be processed are dispatched to workers
     # - a reduce process collects the results, sort them and print them.
-
+    options = {}
     process_count = max(1, process_count)
     maxsize = 10 * process_count
     # output queue
@@ -374,8 +234,7 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 
     # reduce job that sorts and prints output
     reduce = Process(target=reduce_process,
-                     args=(options, output_queue, spool_length,
-                           out_file, file_size, file_compress))
+                     args=(options, output_queue, spool_length, out_file, file_size, file_compress))
     reduce.start()
 
     # initialize jobs queue
@@ -393,22 +252,21 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 
     # Mapper process
     page_num = 0
-    for page_data in pages_from(input):
-        id, revid, title, ns, page = page_data
-        if keepPage(ns, page):
-            # slow down
-            delay = 0
-            if spool_length.value > max_spool_length:
-                # reduce to 10%
-                while spool_length.value > max_spool_length / 10:
-                    time.sleep(10)
-                    delay += 10
-            if delay:
-                logging.info('Delay %ds', delay)
-            job = (id, revid, title, page, page_num)
-            jobs_queue.put(job)  # goes to any available extract_process
-            page_num += 1
-        page = None  # free memory
+    id  = 0
+    for comment in text_from(input):
+        # slow down
+        delay = 0
+        if spool_length.value > max_spool_length:
+            # reduce to 10%
+            while spool_length.value > max_spool_length / 10:
+                time.sleep(10)
+                delay += 10
+        if delay:
+            logging.info('Delay %ds', delay)
+        job = (id, comment, page_num)
+        jobs_queue.put(job)  # goes to any available extract_process
+        page_num += 1
+        id += 1
 
     input.close()
 
@@ -429,7 +287,6 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     logging.info("Finished %d-process extraction of %d articles in %.1fs (%.1f art/s)",
                  process_count, page_num, extract_duration, extract_rate)
 
-
 # ----------------------------------------------------------------------
 # Multiprocess support
 
@@ -441,25 +298,22 @@ def extract_process(opts, i, jobs_queue, output_queue):
     :param output_queue: where to queue extracted text for output.
     """
 
-    global options
-    options = opts
-
-    createLogger(options.quiet, options.debug)
+    createLogger(True, False)
 
     out = StringIO()  # memory buffer
 
     while True:
-        job = jobs_queue.get()  # job is (id, title, page, page_num)
+        job = jobs_queue.get()  # job is (id, comment, page_num)
         if job:
-            id, revid, title, page, page_num = job
+            id, comment, page_num = job
             try:
-                e = Extractor(*job[:4])  # (id, revid, title, page)
+                e = Extractor(*job[:2])  # (id, comment)
                 page = None  # free memory
                 e.extract(out)
                 text = out.getvalue()
             except:
                 text = ''
-                logging.exception('Processing page: %s %s', id, title)
+                logging.exception('Processing page: %s %s', id, comment)
 
             output_queue.put((page_num, text))
             out.truncate(0)
@@ -470,11 +324,7 @@ def extract_process(opts, i, jobs_queue, output_queue):
     out.close()
 
 
-report_period = 10000  # progress report period
-
-
-def reduce_process(opts, output_queue, spool_length,
-                   out_file=None, file_size=0, file_compress=True):
+def reduce_process(opts, output_queue, spool_length, out_file=None, file_size=0, file_compress=True):
     """Pull finished article text, write series of files (or stdout)
     :param opts: global parameters.
     :param output_queue: text to be output.
@@ -484,18 +334,13 @@ def reduce_process(opts, output_queue, spool_length,
     :param file_compress: whether to compress output.
     """
 
-    global options
-    options = opts
-
-    createLogger(options.quiet, options.debug)
+    createLogger(True, False)
 
     if out_file:
         nextFile = NextFile(out_file)
         output = OutputSplitter(nextFile, file_size, file_compress)
     else:
-        output = sys.stdout if PY2 else sys.stdout.buffer
-        if file_compress:
-            logging.warn("writing to stdout, so no output compression (use an external tool)")
+        logging.warning("writing to stdout, so no output compression (use an external tool)")
 
     interval_start = default_timer()
     # FIXME: use a heap
@@ -532,10 +377,15 @@ def reduce_process(opts, output_queue, spool_length,
 
 
 # ----------------------------------------------------------------------
+def text_from(file_):
+    comments = []
+    for i, line in enumerate(file_):
+        comments.append(ujson.loads(line)['body'])
+    return comments
 
-# Minimum size of output files
-minFileSize = 200 * 1024
+# ----------------------------------------------------------------------
 
+report_period = 100  # progress report period
 
 def main():
     parser = argparse.ArgumentParser(prog=os.path.basename(sys.argv[0]),
@@ -546,61 +396,25 @@ def main():
     groupO = parser.add_argument_group('Output')
     groupO.add_argument("-o", "--output", default="text",
                         help="directory for extracted files (or '-' for dumping to stdout)")
-    groupO.add_argument("-b", "--bytes", default="1M",
-                        help="maximum bytes per output file (default %(default)s)",
-                        metavar="n[KMG]")
     groupO.add_argument("-c", "--compress", action="store_true",
                         help="compress output files using bzip")
     groupO.add_argument("--json", action="store_true",
                         help="write output in json format instead of the default one")
 
-    groupP = parser.add_argument_group('Processing')
-    groupP.add_argument("--html", action="store_true",
-                        help="produce HTML output, subsumes --links")
 
     default_process_count = max(1, cpu_count() - 1)
+    print(default_process_count)
     parser.add_argument("--processes", type=int, default=default_process_count,
                         help="Number of processes to use (default %(default)s)")
 
-
-
     args = parser.parse_args()
-    options.write_json = args.json
-
-    try:
-        power = 'kmg'.find(args.bytes[-1].lower()) + 1
-        file_size = int(args.bytes[:-1]) * 1024 ** power
-        if file_size < minFileSize:
-            raise ValueError()
-    except ValueError:
-        logging.error('Insufficient or invalid size: %s', args.bytes)
-        return
 
     FORMAT = '%(levelname)s: %(message)s'
     logging.basicConfig(format=FORMAT)
 
-    options.quiet = args.quiet
-    options.debug = args.debug
-
-    createLogger(options.quiet, options.debug)
+    createLogger(True, False)
 
     input_file = args.input
-
-    if not options.keepLinks:
-        ignoreTag('a')
-
-    if args.article:
-        if args.templates:
-            if os.path.exists(args.templates):
-                with open(args.templates) as file:
-                    load_templates(file)
-
-        file = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
-        for page_data in pages_from(file):
-            id, revid, title, ns, page = page_data
-            Extractor(id, revid, title, page).extract(sys.stdout)
-        file.close()
-        return
 
     output_path = args.output
     if output_path != '-' and not os.path.isdir(output_path):
@@ -609,9 +423,10 @@ def main():
         except:
             logging.error('Could not create: %s', output_path)
             return
+    # Minimum size of output files
+    file_size = 100 * 1024
 
-    process_dump(input_file, args.templates, output_path, file_size,
-                 args.compress, args.processes)
+    process_dump(input_file, output_path, file_size, args.compress, args.processes)
 
 
 if __name__ == '__main__':
