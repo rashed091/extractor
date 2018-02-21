@@ -286,6 +286,7 @@ def process_dump(input_file, out_file, file_size, file_compress, process_count):
     extract_rate = page_num / extract_duration
     logging.info("Finished %d-process extraction of %d articles in %.1fs (%.1f art/s)",
                  process_count, page_num, extract_duration, extract_rate)
+    print('Finished {}-process extraction of {} articles in {} ({} com/s)'.format(process_count, page_num, extract_duration, extract_rate))
 
 # ----------------------------------------------------------------------
 # Multiprocess support
@@ -424,7 +425,7 @@ def main():
             logging.error('Could not create: %s', output_path)
             return
     # Minimum size of output files
-    file_size = 100 * 1024
+    file_size = 200 * 1024
 
     process_dump(input_file, output_path, file_size, args.compress, args.processes)
 
