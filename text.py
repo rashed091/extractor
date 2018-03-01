@@ -3,29 +3,16 @@ from __future__ import unicode_literals, division
 import spacy
 import re
 import sys
-import bz2
 import fileinput
-import os.path
-import json
 import ujson
 
 
-# Matches space
-spaces = re.compile(r' {2,}')
-
-# Matches dots
-dots = re.compile(r'\.{4,}')
+# ======================================================================
 
 pre_format_re = re.compile(r'^[\`\*\~]')
 post_format_re = re.compile(r'[\`\*\~]$')
 url_re = re.compile(r'\[([^]]+)\]\(%%URL\)')
 link_re = re.compile(r'\[([^]]+)\]\(https?://[^\)]+\)')
-
-## PARAMS ####################################################################
-
-options = {
-    'write_json': True
-}
 
 # ===========================================================================
 LABELS = {

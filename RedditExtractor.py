@@ -62,7 +62,7 @@ class Extractor(object):
     def __init__(self, id, text):
         self.id = id
         self.text = text
-        self.nlp = spacy.load('en')
+        self.nlp = spacy.load('en_core_web_sm')
 
     def write_output(self, out, text):
         """
@@ -403,7 +403,7 @@ def main():
                         help="write output in json format instead of the default one")
 
 
-    default_process_count = max(1, cpu_count() - 1)
+    default_process_count = max(1, cpu_count() - 4)
     print(default_process_count)
     parser.add_argument("--processes", type=int, default=default_process_count,
                         help="Number of processes to use (default %(default)s)")
@@ -425,7 +425,7 @@ def main():
             logging.error('Could not create: %s', output_path)
             return
     # Minimum size of output files
-    file_size = 200 * 1024
+    file_size = 3000 * 1024
 
     process_dump(input_file, output_path, file_size, args.compress, args.processes)
 
