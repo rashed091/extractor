@@ -3,12 +3,17 @@ import io
 import bz2
 from toolz import partition
 from os import path
+import multiprocessing
 import os
 import re
 import ujson
+import random
 import spacy
-from spacy.tokens.doc import Doc
-import time
+import argparse
+import fileinput
+from itertools import zip_longest
+
+import sys
 from joblib import Parallel, delayed
 
 LABELS = {
@@ -75,6 +80,22 @@ def parse_and_transform(batch_id, input_, out_dir):
                 print('Error occured here?')
 
 
+def worker(input_):
+    batch_id = random.randint(0, 1000)
+    out_loc = path.join('Reddit', '%d.txt' % batch_id)
+    if path.exists(out_loc):
+        return None
+    print('Batch', batch_id)
+    nlp = spacy.load('en_core_web_sm')
+    with io.open(out_loc, 'w', encoding='utf8') as file_:
+        for text in input_:
+            try:
+                doc =nlp(strip_meta(text))
+                file_.write(transform_doc(doc))
+            except Exception as e:
+                print(strip_meta(text))
+                print('Error occured here?')
+
 
 def transform_doc(doc):
     for ent in doc.ents:
@@ -102,29 +123,33 @@ def represent_word(word):
         tag = '?'
     return text + '|' + tag
 
+def text_from(file_):
+    comments = []
+    for i, line in enumerate(file_):
+        comments.append(ujson.loads(line)['body'])
+    return comments
 
-def batch_process(in_loc='D:\Workspace\sense2vec\data\RC_2016-05.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4):
-    if not path.exists(out_dir):
-        path.join(out_dir)
-    jobs = partition(50000, iter_comments(in_loc))
-    do_work = parse_and_transform
-    parallelize(do_work, enumerate(jobs), n_workers, [out_dir])
-
-
-def main(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4, load_parses=False):
-    if not path.exists(out_dir):
-        path.join(out_dir)
-
-    t1 = time.time()
-    batches = partition(50000, iter_comments(in_loc))
-    for i, batch in enumerate(batches):
-        parse_and_transform(i, batch, out_dir)
-        print('Batch# {} is completed!'.format(i))
-        break
-    t2 = time.time()
-    print("Total time: %.3f" % (t2 - t1))
-
+def grouper(n, iterable, padvalue=None):
+    return zip_longest(*[iter(iterable)]*n, fillvalue=padvalue)
 
 if __name__ == '__main__':
-    # main()
-    batch_process()
+    parser = argparse.ArgumentParser(prog=os.path.basename(sys.argv[0]),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     description=__doc__)
+    parser.add_argument("input", help="XML wiki dump file")
+
+    args = parser.parse_args()
+
+    input_file = args.input
+
+    processes = multiprocessing.Pool(8)
+    #
+    # input = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
+    #
+    # batches = text_from(input)
+
+    groups = partition(100000, iter_comments(input_file))
+
+    for g in groups:
+        result = processes.map(worker, [g])
+    
