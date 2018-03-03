@@ -99,15 +99,13 @@ def represent_word(word):
     return text + '|' + tag
 
 
-def main(in_loc='D:\Workspace\extractor\data\RC_2016-01.bz2', out_dir="D:\Workspace\extractor\data", n_workers=8, load_parses=False):
+def main(in_loc='D:\Workspace\extractor\data\RC_2016-01.bz2', out_dir="D:\Workspace\extractor\data", n_workers=14, load_parses=False):
     if not path.exists(out_dir):
         path.join(out_dir)
     t1 = default_timer()
-    jobs = partition(1000000, iter_comments(in_loc))
-    # do_work = parse_and_transform
-    # parallelize(do_work, enumerate(jobs), n_workers, [out_dir])
-    for i, j in enumerate(jobs):
-        print('Batch#{}'.format(i))
+    jobs = partition(100000, iter_comments(in_loc))
+    do_work = parse_and_transform
+    parallelize(do_work, enumerate(jobs), n_workers, [out_dir])
     t2 = default_timer()
     print('Execution Time: {}'.format(t2-t1))
 
