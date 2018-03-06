@@ -44,13 +44,13 @@ def iter_comments(loc):
             yield ujson.loads(line)['body']
 
 
-pre_format_re = re.compile(r'^[\`\*\~]')
-post_format_re = re.compile(r'[\`\*\~]$')
-url_re = re.compile(r'\[([^]]+)\]\(%%URL\)')
-link_re = re.compile(r'\[([^]]+)\]\(https?://[^\)]+\)')
-
 
 def strip_meta(text):
+    pre_format_re = re.compile(r'^[\`\*\~]')
+    post_format_re = re.compile(r'[\`\*\~]$')
+    url_re = re.compile(r'\[([^]]+)\]\(%%URL\)')
+    link_re = re.compile(r'\[([^]]+)\]\(https?://[^\)]+\)')
+
     text = link_re.sub(r'\1', text)
     text = text.replace('&gt;', '>').replace('&lt;', '<')
     text = pre_format_re.sub('', text)
@@ -63,12 +63,16 @@ def parse_and_transform(batch_id, input_, out_dir):
     if path.exists(out_loc):
         return None
     print('Batch', batch_id)
-    nlp = spacy.load('en_core_web_sm')
+    nlp = spacy.load('en_core_web_sm', disable=['textcat'])
     with io.open(out_loc, 'w', encoding='utf8') as file_:
         for text in input_:
             try:
+                t1 = default_timer()
                 doc =nlp(strip_meta(text))
+                print('Spacy: {}'.format(100 * (default_timer() - t1)))
+                t1 = default_timer()
                 file_.write(transform_doc(doc))
+                print('Write: {}'.format(100 * (default_timer() - t1)))
             except Exception as e:
                 print('Error! {}'.format(strip_meta(text)))
 
@@ -100,13 +104,15 @@ def represent_word(word):
     return text + '|' + tag
 
 
-def main(in_loc='D:\Workspace\extractor\data\RC_2016-01.bz2', out_dir="D:\Workspace\extractor\data", n_workers=14, load_parses=False):
+def main(in_loc='/home/newscred/Workspace/extractor/data/RC_2007-12.bz2', out_dir="/home/newscred/Workspace/extractor/data"):
     if not path.exists(out_dir):
         path.join(out_dir)
     t1 = default_timer()
-    jobs = partition(100000, iter_comments(in_loc))
+    jobs = partition(10000, iter_comments(in_loc))
     do_work = parse_and_transform
-    parallelize(do_work, enumerate(jobs), n_workers, [out_dir])
+    worker = cpu_count() - 2
+    print('Number of worker# {}'.format(worker))
+    parallelize(do_work, enumerate(jobs), worker, [out_dir])
     t2 = default_timer()
     print('Execution Time: {}'.format(t2-t1))
 
