@@ -108,7 +108,7 @@ def main(in_loc='/home/newscred/Workspace/extractor/data/RC_2007-12.bz2', out_di
     if not path.exists(out_dir):
         path.join(out_dir)
     t1 = default_timer()
-    jobs = partition(10000, iter_comments(in_loc))
+    jobs = partitiona_all(10000, iter_comments(in_loc))
     do_work = parse_and_transform
     worker = cpu_count() - 2
     print('Number of worker# {}'.format(worker))

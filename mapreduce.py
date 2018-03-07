@@ -24,7 +24,7 @@ class MapReduce(object):
 
     
     def __call__(self, inputs, chunksize=1):
-        map_responses = self.pool.map(self.map_func, inputs)
+        map_responses = self.pool.map(self.map_func, inputs, chunksize=chunksize)
         partitioned_data = self.partition(itertools.chain(*map_responses))
         reduced_values = self.pool.map(self.reduce_func, partitioned_data)
         return reduced_values
